@@ -1,12 +1,19 @@
 const { makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const pino = require('pino');
+const settings = require('./settings'); // Settings import කිරීම
 
 let userCache = {}; 
 
 async function startEduBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_session');
-    const sock = makeWASocket({ auth: state, printQRInTerminal: true });
+    
+    const sock = makeWASocket({ 
+        auth: state, 
+        printQRInTerminal: true,
+        logger: pino({ level: 'silent' }) // අනවශ්‍ය logs වළක්වයි
+    });
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -16,11 +23,30 @@ async function startEduBot() {
 
         const from = msg.key.remoteJid;
         const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+        const prefix = settings.prefix;
 
-       
-        if (text.startsWith('.search')) {
-            const query = text.replace('.search', '').trim().toLowerCase();
-            if (!query) return sock.sendMessage(from, { text: 'කරුණාකර සෙවිය යුතු වචනයක් ඇතුළත් කරන්න. (උදා: .search ict)' });
+        // 1. මෙනු එක පෙන්වීම
+        if (text === `${prefix}menu` || text === 'menu' || text === 'hi') {
+            const formattedMenu = settings.menu.replace('[prefix]', prefix);
+            
+            await sock.sendMessage(from, { 
+                text: formattedMenu,
+                contextInfo: {
+                    externalAdReply: {
+                        title: settings.botName,
+                        body: 'ඔබේ අධ්‍යාපන සහකරු',
+                        mediaType: 1,
+                        sourceUrl: 'https://govdoc.lk',
+                        thumbnailUrl: 'https://i.ibb.co/LzNf9mS/edu-bot.jpg' // මෙතනට ඔයාගේ ඉමේජ් ලින්ක් එකක් දාන්න
+                    }
+                }
+            });
+        }
+
+        // 2. සර්ච් කිරීම (Search Logic)
+        else if (text.startsWith(`${prefix}search`)) {
+            const query = text.replace(`${prefix}search`, '').trim().toLowerCase();
+            if (!query) return sock.sendMessage(from, { text: `කරුණාකර සෙවිය යුතු වචනයක් ඇතුළත් කරන්න. (උදා: ${prefix}search ict)` });
 
             await sock.sendMessage(from, { text: `🔍 "${query}" සඳහා පේපර්ස් සොයමින් පවතිනවා...` });
 
@@ -32,7 +58,6 @@ async function startEduBot() {
                 $('a').each((i, el) => {
                     const name = $(el).text().trim();
                     const link = $(el).attr('href');
-                    
                     if (link && link.endsWith('.pdf') && name.toLowerCase().includes(query)) {
                         results.push({ name, link });
                     }
@@ -54,23 +79,28 @@ async function startEduBot() {
             }
         }
 
+        // 3. අංකය ලැබුණු විට ඩවුන්ලෝඩ් කිරීම
         else if (!isNaN(text) && userCache[from]) {
             const index = parseInt(text) - 1;
             const item = userCache[from][index];
 
             if (item) {
                 await sock.sendMessage(from, { text: `📥 *${item.name}* ඩවුන්ලෝඩ් වෙමින් පවතී...` });
-                const response = await axios({ method: 'get', url: item.link, responseType: 'arraybuffer' });
-                
-                await sock.sendMessage(from, { 
-                    document: Buffer.from(response.data), 
-                    mimetype: 'application/pdf', 
-                    fileName: `${item.name}.pdf`,
-                    caption: 'මෙන්න ඔයා ඉල්ලපු පේපර් එක. සාර්ථකව විභාගයට සූදානම් වෙන්න! 🎓'
-                });
+                try {
+                    const response = await axios({ method: 'get', url: item.link, responseType: 'arraybuffer' });
+                    await sock.sendMessage(from, { 
+                        document: Buffer.from(response.data), 
+                        mimetype: 'application/pdf', 
+                        fileName: `${item.name}.pdf`,
+                        caption: `මෙන්න ඔයා ඉල්ලපු පේපර් එක. ✅\n\n*${settings.botName}*`
+                    });
+                } catch (e) {
+                    await sock.sendMessage(from, { text: 'ඩවුන්ලෝඩ් කිරීමේ දෝෂයකි.' });
+                }
             }
         }
     });
 }
 
+startEduBot();
 startEduBot();
